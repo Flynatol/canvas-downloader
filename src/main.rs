@@ -176,7 +176,8 @@ async fn main() -> Result<()> {
             "{}/api/v1/courses/{}/folders/by_path/",
             cred.canvas_url, course.id
         );
-
+        
+        /*
         let folder_path = course_folder_path.join("files");
         fork!(
             process_folders,
@@ -184,7 +185,8 @@ async fn main() -> Result<()> {
             (String, PathBuf),
             options.clone()
         );
-
+         */
+        
         let course_api_link = format!(
             "{}/api/v1/courses/{}/",
             cred.canvas_url, course.id
@@ -391,7 +393,7 @@ async fn process_folders(
             Ok(canvas::FolderResult::Ok(folders)) => {
                 for folder in folders {
                     // println!("  * {} - {}", folder.id, folder.name);
-                    let sanitized_folder_name = sanitize_filename::sanitize(folder.name);
+                    let sanitized_folder_name = sanitize_foldername(folder.name);
                     // if the folder has no parent, it is the root folder of a course
                     // so we avoid the extra directory nesting by not appending the root folder name
                     let folder_path = if folder.parent_folder_id.is_some() {
@@ -583,7 +585,7 @@ async fn process_video_folder(
         // Subfolders are the same, so process only the first request
         if i == 0 {
             for subfolder in sessions.Subfolders {
-                let subfolder_path = path.join(subfolder.Name);
+                let subfolder_path = path.join(sanitize_foldername(subfolder.Name));
                 create_folder_if_not_exist(&subfolder_path)?;
                 fork!(
                     process_video_folder,
@@ -730,6 +732,11 @@ async fn process_data(
         (String, bool, PathBuf),
         options.clone()
     );
+
+    
+    /*
+    I do not need this
+
     let pages_path = path.join("pages");
     create_folder_if_not_exist(&pages_path)?;
     fork!(
@@ -738,6 +745,17 @@ async fn process_data(
         (String, PathBuf),
         options.clone()
     );
+     */
+
+    let modules_path = path.join("modules");
+    create_folder_if_not_exist(&modules_path)?;
+    fork!(
+        process_modules,
+        (url.clone(), modules_path),
+        (String, PathBuf),
+        options.clone()
+    );
+
     Ok(())
 }
 
@@ -766,7 +784,7 @@ async fn process_pages(
             Ok(canvas::PageResult::Ok(pages)) => {
                 for page in pages {
                     let page_url = format!("{}pages/{}", url, page.url);
-                    let page_file_path = path.join(page.url.clone());
+                    let page_file_path = path.join(sanitize_foldername(page.url.clone()));
                     create_folder_if_not_exist(&page_file_path)?;
                     fork!(
                         process_page_body,
@@ -796,7 +814,7 @@ async fn process_page_body(
 ) -> Result<()> {
     let page_resp = get_canvas_api(url.clone(), &options).await?;
 
-    let page_file_path = path.join(format!("{}.json", title));
+    let page_file_path = path.join(format!("{}.json", sanitize_filename::sanitize(title)));
     let mut page_file = std::fs::File::create(page_file_path.clone())
         .with_context(|| format!("Unable to create file for {:?}", page_file_path))?;
 
@@ -812,7 +830,7 @@ async fn process_page_body(
                 "<html><head><title>{}</title></head><body>{}</body></html>",
                 page_body.title, page_body.body);
             
-            let page_html_path = path.join(format!("{}.html", page_body.url));
+            let page_html_path = path.join(format!("{}.html", sanitize_filename::sanitize(page_body.url)));
             let mut page_html_file = std::fs::File::create(page_html_path.clone())
                 .with_context(|| format!("Unable to create file for {:?}", page_html_path))?;
 
@@ -858,7 +876,7 @@ async fn process_assignments(
         match assignment_result {
             Ok(canvas::AssignmentResult::Ok(assignments)) => {
                 for assignment in assignments {
-                    let assignment_path = path.join(assignment.name);
+                    let assignment_path = path.join(sanitize_foldername(assignment.name));
                     create_folder_if_not_exist(&assignment_path)?;
                     let submissions_url = format!("{}assignments/{}/submissions/", url, assignment.id);
                     fork!(
@@ -925,7 +943,7 @@ async fn process_users (
     let users_url = format!("{}users?include_inactive=true&include[]=avatar_url&include[]=enrollments&include[]=email&include[]=observed_users&include[]=can_be_removed&include[]=custom_links", url);
     let pages = get_pages(users_url, &options).await?;
     
-    let users_path = path.to_string_lossy();
+    let users_path = sanitize_filename::sanitize(path.to_string_lossy());
     let mut users_file = std::fs::File::create(path.clone())
         .with_context(|| format!("Unable to create file for {:?}", users_path))?;
 
@@ -949,7 +967,7 @@ async fn process_discussions(
 
     let discussion_path = path.join("discussions.json");
     let mut discussion_file = std::fs::File::create(discussion_path.clone())
-        .with_context(|| format!("Unable to create file for {:?}", discussion_path))?;
+        .with_context(|| format!("Unable to create file for disc {:?}", discussion_path))?;
 
     for pg in pages {
         let uri = pg.url().to_string();
@@ -965,7 +983,7 @@ async fn process_discussions(
             Ok(canvas::DiscussionResult::Ok(discussions)) => {
                 for discussion in discussions {
                     // download attachments
-                    let discussion_folder_path = path.join(format!("{}_{}", discussion.id, sanitize_filename::sanitize(discussion.title)));
+                    let discussion_folder_path = path.join(format!("{}_{}", discussion.id, sanitize_foldername(discussion.title)));
                     create_folder_if_not_exist(&discussion_folder_path)?;
 
                     let files = discussion.attachments
@@ -1009,6 +1027,130 @@ async fn process_discussions(
     Ok(())
 }
 
+
+async fn process_modules(
+    (url, path): (String, PathBuf),
+    options: Arc<ProcessOptions>,
+) -> Result<()> {
+    let module_url = format!("{}modules", url);
+    let pages = get_pages(module_url, &options).await?;
+
+    let module_path = path.join("modules.json");
+    let mut module_file = std::fs::File::create(module_path.clone())
+        .with_context(|| format!("Unable to create file for {:?}", module_path))?;
+
+    for pg in pages {
+        let uri = pg.url().to_string();
+        let page_body = pg.text().await?;
+
+        module_file
+            .write_all(page_body.as_bytes())
+            .with_context(|| format!("Unable to write to file for {:?}", module_path))?;
+        
+        
+        let module_result = serde_json::from_str::<canvas::ModuleResult>(&page_body);
+
+        match module_result {
+            Ok(canvas::ModuleResult::Ok(module_sections)) => {
+                for module_section in module_sections {
+                    // download attachments
+                    let module_section_folder_path = path.join(format!("{}_{}", module_section.id, sanitize_foldername(module_section.name)));
+                    create_folder_if_not_exist(&module_section_folder_path)?;
+
+                    fork!(
+                        process_module_items,
+                        (module_section.items_url, module_section_folder_path.clone()),
+                        (String, PathBuf),
+                        options.clone()
+                    );
+                }
+            }
+            Ok(canvas::ModuleResult::Err { status }) => {
+                eprintln!(
+                    "Failed to access modules at link:{uri}, path:{path:?}, status:{status}",
+                );
+            }
+            Err(e) => {
+                eprintln!("Error when getting modules at link:{uri}, path:{path:?}\n{e:?}",);
+            }
+        }
+    }
+    Ok(())
+}
+
+
+async fn process_module_items(
+    (url, path): (String, PathBuf),
+    options: Arc<ProcessOptions>,
+) -> Result<()> {
+    let page = get_canvas_api(url, &options).await?;
+
+    let item_path = path.join("items.json");
+    let mut item_file = std::fs::File::create(item_path.clone())
+        .with_context(|| format!("Unable to create file for {:?}", item_path))?;
+
+    let uri = page.url().to_string();
+    let page_body = page.text().await?;
+
+    item_file
+        .write_all(page_body.as_bytes())
+        .with_context(|| format!("Unable to write to file for {:?}", item_path))?;
+   
+    
+    let item_result = serde_json::from_str::<canvas::ModuleItemsResult>(&page_body);
+
+    match item_result {
+        Ok(canvas::ModuleItemsResult::Ok(module_items)) => {
+            for item in module_items {
+                let item_folder_path = path.join(format!("{}_{}", item.id, sanitize_foldername(item.title.clone())));
+                create_folder_if_not_exist(&item_folder_path)?;
+
+                //This is not a great solution, but it works for now
+                if item.Type == "Page" {
+                    fork!(
+                        process_page_body,
+                        (item.url.unwrap(), item.title, item_folder_path),
+                        (String, String, PathBuf),
+                        options.clone()
+                    );
+                } else if item.Type == "File" {
+                    let pg = get_canvas_api(item.url.clone().unwrap(), &options).await?;
+                    let files_result = pg.json::<canvas::File>().await;
+
+
+                    match files_result {
+                        // Got files
+                        Ok(file) => {
+                            let mut filtered_files = filter_files(&options, &item_folder_path, vec![file]);
+                            let mut lock = options.files_to_download.lock().await;
+                            lock.append(&mut filtered_files);
+                        }
+                     
+                        // Parse error
+                        Err(e) => {
+                            eprintln!("Error when getting files at link:{uri}, path:{path:?}\n{e:?}",);
+                        }
+                    };
+        
+
+                }
+            }
+        }
+        Ok(canvas::ModuleItemsResult::Err { status }) => {
+            eprintln!(
+                "Failed to access module items at link:{uri}, path:{path:?}, status:{status}",
+            );
+        }
+        Err(e) => {
+            eprintln!("Error when getting module items at link:{uri}, path:{path:?}\n{e:?}",);
+            eprintln!("content was {page_body}",);
+        }
+    }
+    
+    Ok(())
+}
+
+
 async fn process_discussion_view(
     (url, path): (String, PathBuf),
     options: Arc<ProcessOptions>,
@@ -1018,7 +1160,7 @@ async fn process_discussion_view(
     
     let discussion_view_json = path.join("discussion.json");
     let mut discussion_view_file = std::fs::File::create(discussion_view_json.clone())
-        .with_context(|| format!("Unable to create file for {:?}", discussion_view_json))?;
+        .with_context(|| format!("Unable to create file for v {:?}", discussion_view_json))?;
 
     discussion_view_file
         .write_all(discussion_view_body.as_bytes())
@@ -1070,6 +1212,7 @@ async fn process_files((url, path): (String, PathBuf), options: Arc<ProcessOptio
     // For each page
     for pg in pages {
         let uri = pg.url().to_string();
+
         let files_result = pg.json::<canvas::FileResult>().await;
 
         match files_result {
@@ -1192,7 +1335,9 @@ async fn process_file_id(
     (url, path): (String, PathBuf),
     options: Arc<ProcessOptions>,
 ) -> Result<File> {
-    let file_resp = get_canvas_api(url.clone(), &options).await?;
+    let url = url.trim_end_matches("/download");
+
+    let file_resp = get_canvas_api(url.to_string(), &options).await?;
     let file_result = file_resp.json::<canvas::File>().await;
     match file_result {
         Result::Ok(mut file) => {
@@ -1296,8 +1441,16 @@ async fn get_pages(link: String, options: &ProcessOptions) -> Result<Vec<Respons
         link = parse_next_page(&resp);
         resps.push(resp);
     }
-
     Ok(resps)
+}
+
+fn sanitize_foldername<S: AsRef<str>>(name: S) -> String {
+    let name = name.as_ref();
+    let rex = Regex::new(r#"[/\?<.">\\:\*\|":]"#).unwrap();
+
+    let name_modified = rex.replace_all(&name, "");
+
+    return String::from(name_modified.trim());
 }
 
 async fn get_canvas_api(url: String, options: &ProcessOptions) -> Result<Response> {
@@ -1409,6 +1562,39 @@ mod canvas {
         pub body: String,
         pub updated_at: String,
         pub locked_for_user: bool,
+    }
+
+    #[derive(Clone, Debug, Deserialize)]
+    pub struct ModuleSection {
+        pub id: u32,
+        pub items_url: String,
+        pub name: String,
+    }
+
+    #[derive(Clone, Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+
+    pub struct ModuleItem {
+        pub id: u32,
+        pub title: String,
+        pub Type: String,
+        #[serde(default)]
+        pub url: Option<String>,
+    }
+
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    pub(crate) enum ModuleResult {
+        Err { status: String },
+        Ok(Vec<ModuleSection>),
+    }
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    pub(crate) enum ModuleItemsResult {
+        Err { status: String },
+        Ok(Vec<ModuleItem>),
     }
 
     #[derive(Deserialize)]
